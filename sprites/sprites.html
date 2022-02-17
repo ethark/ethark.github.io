@@ -1,0 +1,275 @@
+<html>
+	<head>
+		<meta charset="utf-8"/>
+		<title>WebGL Sprites Test</title>
+	</head>
+	<body>
+		<h1>WebGL Sprites Test</h1>
+		<p id="fps-counter">Frames-Per-Second: N/A</p>
+		<p>Number of Sprites: 
+			<input type='number' name='spritecount' value='30' onchange="update_sprite_count();"></input>
+		</p>
+		<p>Size of Sprites (pixels): 
+			<input type='number' name='spritesize' value='100' onchange="update_sprite_size();"></input>
+		</p>
+		<p>Mode: 
+			<input type='radio' name='spritemode' value='pointsprites' onchange="use_pointsprites();" checked>Point Sprites</input>
+			<input type='radio' name='spritemode' value='iquadsprites' onchange="use_iquadsprites();">Instanced Quad Sprites</input>
+		</p>
+		<canvas id="canvas" width="500" height="500"></canvas>
+	</body>
+	<script>
+		var canvas = document.getElementById("canvas");
+		var gl = canvas.getContext("webgl2",{alpha:true,antialias:false,preferLowPowerToHighPerformance:false,powerPreference:"high-performance"});
+		gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+		gl.enable(gl.BLEND);
+		gl.clearColor(0.0, 0.0, 0.0, 0.0);
+		var vert_count;
+
+		//async load texture:
+		var tex = gl.createTexture();
+		gl.bindTexture(gl.TEXTURE_2D, tex);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+		var tex_image = new Image();
+		tex_image.addEventListener('load', function(){
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA,gl.UNSIGNED_BYTE, tex_image);
+		});
+		tex_image.src = "telegram_cat.webp";
+		
+		//setup pointsprite shader:
+		var pointsprite_vert_source =
+			"#version 300 es\n" +
+			"precision mediump float;" +
+			"uniform float anim_time;" +
+			"uniform float sprite_scale;" +
+			"in vec2 vert_pos;" +
+			"in vec2 vert_vel;" +
+			"void main(){" +
+				"gl_Position = vec4( mod(vert_pos.x + anim_time*vert_vel.x,2.0)-1.0,  mod(vert_pos.y + anim_time*vert_vel.y,2.0)-1.0 ,0.0,1.0);" +
+				"gl_PointSize = sprite_scale;" +
+			"}";
+		var pointsprite_vert_shader = gl.createShader(gl.VERTEX_SHADER);
+		gl.shaderSource(pointsprite_vert_shader,pointsprite_vert_source);
+		gl.compileShader(pointsprite_vert_shader);
+		
+		var pointsprite_frag_source =
+			"#version 300 es\n" +
+			"precision mediump float;" +
+			"uniform sampler2D tex;" +
+			"out vec4 frag_colr;" +
+			"void main(){" +
+				"frag_colr = texture(tex,gl_PointCoord);" +
+			"}";
+		var pointsprite_frag_shader = gl.createShader(gl.FRAGMENT_SHADER);
+		gl.shaderSource(pointsprite_frag_shader,pointsprite_frag_source);
+		gl.compileShader(pointsprite_frag_shader);
+		
+		var pointsprite_shader = gl.createProgram();
+		gl.attachShader(pointsprite_shader,pointsprite_vert_shader);
+		gl.attachShader(pointsprite_shader,pointsprite_frag_shader);
+		gl.linkProgram(pointsprite_shader);
+		gl.useProgram(pointsprite_shader);
+		
+		var pointsprite_attribs = gl.createVertexArray();
+		gl.bindVertexArray(pointsprite_attribs);
+		
+		var pointsprite_vert_pos = gl.getAttribLocation(pointsprite_shader, "vert_pos");
+		var pointsprite_pos_buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER,pointsprite_pos_buffer);
+		gl.enableVertexAttribArray(pointsprite_vert_pos);
+		gl.vertexAttribPointer(pointsprite_vert_pos,2,gl.FLOAT,false,0,0);
+		
+		var pointsprite_vert_vel = gl.getAttribLocation(pointsprite_shader, "vert_vel");
+		var pointsprite_vel_buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER,pointsprite_vel_buffer);
+		gl.enableVertexAttribArray(pointsprite_vert_vel);
+		gl.vertexAttribPointer(pointsprite_vert_vel,2,gl.FLOAT,false,0,0);
+		
+		var pointsprite_anim_time = gl.getUniformLocation(pointsprite_shader, "anim_time");
+		var pointsprite_sprite_scale = gl.getUniformLocation(pointsprite_shader, "sprite_scale");
+		
+		//setup iquadsprite shader:
+		var iquadsprite_vert_source =
+			"#version 300 es\n" +
+			"precision mediump float;" +
+			"uniform float anim_time;" +
+			"uniform float sprite_scale;" +
+			"in vec2 vert_pos;" +
+			"in vec2 vert_vel;" +
+			"in vec2 vert_ofst;" +
+			"in vec2 vert_colr;" +
+			"out vec2 vary_colr;" +
+			"void main(){" +
+			//	"gl_Position = vec4(vert_pos + sprite_scale*vert_ofst,0.0,1.0);" +
+				"gl_Position = vec4(" +
+					"mod(vert_pos.x + anim_time*vert_vel.x,2.0) + sprite_scale*vert_ofst.x -1.0," +
+					"mod(vert_pos.y + anim_time*vert_vel.y,2.0) + sprite_scale*vert_ofst.y -1.0," +
+					"0.0,1.0);" +
+				"vary_colr = vert_colr;" +
+			"}";
+		var iquadsprite_vert_shader = gl.createShader(gl.VERTEX_SHADER);
+		gl.shaderSource(iquadsprite_vert_shader,iquadsprite_vert_source);
+		gl.compileShader(iquadsprite_vert_shader);
+		
+		var iquadsprite_frag_source =
+			"#version 300 es\n" +
+			"precision mediump float;" +
+			"uniform sampler2D tex;" +
+			"in vec2 vary_colr;" +
+			"out vec4 frag_colr;" +
+			"void main(){" +
+				"frag_colr = texture(tex,vary_colr);" +
+			"}";
+		var iquadsprite_frag_shader = gl.createShader(gl.FRAGMENT_SHADER);
+		gl.shaderSource(iquadsprite_frag_shader,iquadsprite_frag_source);
+		gl.compileShader(iquadsprite_frag_shader);
+		
+		var iquadsprite_shader = gl.createProgram();
+		gl.attachShader(iquadsprite_shader,iquadsprite_vert_shader);
+		gl.attachShader(iquadsprite_shader,iquadsprite_frag_shader);
+		gl.linkProgram(iquadsprite_shader);
+		gl.useProgram(iquadsprite_shader);
+		
+		var iquadsprite_attribs = gl.createVertexArray();
+		gl.bindVertexArray(iquadsprite_attribs);
+		
+		var iquadsprite_vert_pos = gl.getAttribLocation(iquadsprite_shader, "vert_pos");
+		var iquadsprite_pos_buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER,iquadsprite_pos_buffer);
+		gl.enableVertexAttribArray(iquadsprite_vert_pos);
+		gl.vertexAttribPointer(iquadsprite_vert_pos,2,gl.FLOAT,false,0,0);
+		gl.vertexAttribDivisor(iquadsprite_vert_pos,1);
+		
+		var iquadsprite_vert_vel = gl.getAttribLocation(iquadsprite_shader, "vert_vel");
+		var iquadsprite_vel_buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER,iquadsprite_vel_buffer);
+		gl.enableVertexAttribArray(iquadsprite_vert_vel);
+		gl.vertexAttribPointer(iquadsprite_vert_vel,2,gl.FLOAT,false,0,0);
+		gl.vertexAttribDivisor(iquadsprite_vert_vel,1);
+		
+		var quad = [
+			1.0,1.0,
+			1.0,-1.0,
+			-1.0,-1.0,
+			-1.0,-1.0,
+			-1.0,1.0,
+			1.0,1.0,
+		];
+		var iquadsprite_vert_ofst = gl.getAttribLocation(iquadsprite_shader, "vert_ofst");
+		var iquadsprite_ofst_buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER,iquadsprite_ofst_buffer);
+		gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(quad),gl.STATIC_DRAW);
+		gl.enableVertexAttribArray(iquadsprite_vert_ofst);
+		gl.vertexAttribPointer(iquadsprite_vert_ofst,2,gl.FLOAT,false,0,0);
+		
+		var quad_colr = [
+			1.0,0.0,
+			1.0,1.0,
+			0.0,1.0,
+			0.0,1.0,
+			0.0,0.0,
+			1.0,0.0,
+		];
+		var iquadsprite_vert_colr = gl.getAttribLocation(iquadsprite_shader, "vert_colr");
+		var iquadsprite_colr_buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER,iquadsprite_colr_buffer);
+		gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(quad_colr),gl.STATIC_DRAW);
+		gl.enableVertexAttribArray(iquadsprite_vert_colr);
+		gl.vertexAttribPointer(iquadsprite_vert_colr,2,gl.FLOAT,false,0,0);
+		
+		var iquadsprite_anim_time = gl.getUniformLocation(iquadsprite_shader, "anim_time");
+		var iquadsprite_sprite_scale = gl.getUniformLocation(iquadsprite_shader, "sprite_scale");
+		
+		//prepare draw loop:
+		var start_time;
+		var frame_count = 0;
+		var last_time = 0.0;
+		
+		function update_sprite_size(){
+			if(document.querySelector('input[name="spritemode"]:checked').value == "pointsprites"){
+				gl.uniform1f(pointsprite_sprite_scale,parseInt(document.querySelector('input[name="spritesize"]').value));
+			}else if(document.querySelector('input[name="spritemode"]:checked').value == "iquadsprites"){
+				gl.uniform1f(iquadsprite_sprite_scale,parseInt(document.querySelector('input[name="spritesize"]').value)/500.0);
+			}
+		};
+		
+		function update_sprite_count(){
+			vert_count = parseInt(document.querySelector('input[name="spritecount"]').value);
+			var verts = [];
+			for(var i = 0; i < 2*vert_count; i++){ verts.push(2*Math.random() - 1); }
+			var vels = [];
+			for(var i = 0; i < 2*vert_count; i++){ vels.push(2*Math.random() - 1); }
+			if(document.querySelector('input[name="spritemode"]:checked').value == "pointsprites"){
+				gl.bindBuffer(gl.ARRAY_BUFFER,pointsprite_pos_buffer);
+				gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(verts),gl.STATIC_DRAW);
+				gl.bindBuffer(gl.ARRAY_BUFFER,pointsprite_vel_buffer);
+				gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vels),gl.STATIC_DRAW);
+			}else if(document.querySelector('input[name="spritemode"]:checked').value == "iquadsprites"){
+				gl.bindBuffer(gl.ARRAY_BUFFER,iquadsprite_pos_buffer);
+				gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(verts),gl.STATIC_DRAW);
+				gl.bindBuffer(gl.ARRAY_BUFFER,iquadsprite_vel_buffer);
+				gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vels),gl.STATIC_DRAW);
+			}
+		};
+		
+		function use_pointsprites(){
+			update_routine = update_canvas_pointsprites;
+			frame_count = 0;
+			gl.useProgram(pointsprite_shader);
+			gl.bindVertexArray(pointsprite_attribs);
+			update_sprite_size();
+			update_sprite_count();
+		};
+
+		function use_iquadsprites(){
+			update_routine = update_canvas_iquadsprites;
+			frame_count = 0;
+			gl.useProgram(iquadsprite_shader);
+			gl.bindVertexArray(iquadsprite_attribs);
+			update_sprite_size();
+			update_sprite_count();
+		};
+		
+		function update_canvas_pointsprites(){
+			frame_count++;
+			var seq_time = (Date.now()-start_time)/1000.0;
+			if(last_time + 1.0 < seq_time){
+				last_time = Math.floor(seq_time);
+				document.getElementById("fps-counter").innerHTML = "Frames-Per-Second: " + frame_count;
+				frame_count = 0;
+			}
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			gl.uniform1f(pointsprite_anim_time,seq_time);
+			gl.drawArrays(gl.POINTS,0,vert_count);
+			window.requestAnimationFrame(update_routine);
+		}
+		
+		function update_canvas_iquadsprites(){
+			frame_count++;
+			var seq_time = (Date.now()-start_time)/1000.0;
+			if(last_time != Math.floor(seq_time)){
+				last_time = Math.floor(seq_time);
+				document.getElementById("fps-counter").innerHTML = "Frames-Per-Second: " + frame_count;
+				frame_count = 0;
+			}
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			gl.uniform1f(iquadsprite_anim_time,seq_time);
+			gl.drawArraysInstanced(gl.TRIANGLES,0,6,vert_count);
+			window.requestAnimationFrame(update_routine);
+		}
+		
+		var update_routine;
+		if(document.querySelector('input[name="spritemode"]:checked').value == "pointsprites"){
+			use_pointsprites();
+		}else if(document.querySelector('input[name="spritemode"]:checked').value == "iquadsprites"){
+			use_iquadsprites();
+		}
+		var start_time = Date.now();
+		update_sprite_size();
+		update_routine();
+	</script>
+</html>
